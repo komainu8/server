@@ -451,6 +451,8 @@ void TABLE_SHARE::destroy()
   DBUG_ENTER("TABLE_SHARE::destroy");
   DBUG_PRINT("info", ("db: %s table: %s", db.str, table_name.str));
 
+  DBUG_ASSERT(!check_foreign_keys(current_thd));
+
   if (ha_share)
   {
     delete ha_share;
@@ -9322,6 +9324,78 @@ need_close:
                                          thd->variables.lock_wait_timeout))
         return true;
       close_all_tables_for_name(thd, el->share, HA_EXTRA_NOT_USED, NULL);
+    }
+  }
+  return false;
+}
+
+bool TABLE_SHARE::check_foreign_keys(THD *thd)
+{
+  List_iterator_fast<FOREIGN_KEY_INFO> ref_it (*referenced_keys);
+  List_iterator_fast<FOREIGN_KEY_INFO> fk_it;
+  if (referenced_by_foreign_key()) {
+    while (FOREIGN_KEY_INFO *rk= ref_it++)
+    {
+      TDC_element *el= tdc_lock_share(thd, rk->foreign_db->str, rk->foreign_table->str);
+      if (!el)
+      {
+        if (ha_table_exists(thd, rk->foreign_db, rk->foreign_table))
+        {
+          push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
+                              ER_UNKNOWN_ERROR,
+                              "Foreign table %s.%s is not opened",
+                              rk->foreign_db->str,
+                              rk->foreign_table->str);
+          return false;
+        }
+        push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
+                            ER_UNKNOWN_ERROR,
+                            "Foreign table %s.%s not exists",
+                            rk->foreign_db->str,
+                            rk->foreign_table->str);
+        return true;
+      }
+      fk_it.init(*el->share->foreign_keys);
+      FOREIGN_KEY_INFO *fk;
+      bool found_table= false;
+      while ((fk= fk_it++))
+      {
+        if (!cmp(fk->referenced_db, &db) && !cmp(fk->referenced_table, &table_name))
+        {
+          found_table= true;
+          List_iterator_fast<LEX_CSTRING> rk_fld_it(rk->referenced_fields);
+          List_iterator_fast<LEX_CSTRING> fk_fld_it(fk->referenced_fields);
+          List_iterator_fast<LEX_CSTRING> rk_fld2_it(rk->foreign_fields);
+          List_iterator_fast<LEX_CSTRING> fk_fld2_it(fk->foreign_fields);
+          LEX_CSTRING *fk_fld;
+          while ((fk_fld= fk_fld_it++))
+          {
+            LEX_CSTRING *rk_fld= rk_fld_it++;
+            if (!rk_fld || cmp(fk_fld, rk_fld))
+              break;
+            fk_fld= fk_fld2_it++;
+            DBUG_ASSERT(fk_fld);
+            rk_fld= rk_fld2_it++;
+            DBUG_ASSERT(rk_fld);
+            if (cmp(fk_fld, rk_fld))
+              break;
+          }
+          if (!fk_fld)
+            break;
+        }
+      }
+      tdc_unlock_share(el);
+      if (!fk)
+      {
+        push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
+                            ER_UNKNOWN_ERROR,
+                            found_table ?
+                            "Foreign table %s.%s does not match foreign keys with referenced keys" :
+                            "Foreign table %s.%s does not refer this table",
+                            rk->foreign_db->str,
+                            rk->foreign_table->str);
+        return true;
+      }
     }
   }
   return false;
