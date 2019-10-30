@@ -479,20 +479,6 @@ int federated_db_init(void *p)
   init_federated_psi_keys();
 #endif /* HAVE_PSI_INTERFACE */
 
-  handlerton *federated_hton= (handlerton *)p;
-  federated_hton->db_type= DB_TYPE_FEDERATED_DB;
-  federated_hton->commit= federated_commit;
-  federated_hton->rollback= federated_rollback;
-  federated_hton->create= federated_create_handler;
-  federated_hton->flags= HTON_ALTER_NOT_SUPPORTED | HTON_NO_PARTITION;
-
-  /*
-    Support for transactions disabled until WL#2952 fixes it.
-	We do it like this to avoid "defined but not used" compiler warnings.
-  */
-  federated_hton->commit= 0;
-  federated_hton->rollback= 0;
-
   if (mysql_mutex_init(fe_key_mutex_federated,
                        &federated_mutex, MY_MUTEX_INIT_FAST))
     goto error;
@@ -3383,8 +3369,29 @@ int ha_federated::execute_simple_query(const char *query, int len)
   DBUG_RETURN(0);
 }
 
+struct federated_handlerton : public handlerton
+{
+  federated_handlerton()
+  {
+    this->db_type= DB_TYPE_FEDERATED_DB;
+    this->commit= federated_commit;
+    this->rollback= federated_rollback;
+    this->create= federated_create_handler;
+    this->flags= HTON_ALTER_NOT_SUPPORTED | HTON_NO_PARTITION;
+
+    /*
+      Support for transactions disabled until WL#2952 fixes it.
+      We do it like this to avoid "defined but not used" compiler warnings.
+    */
+    this->commit= 0;
+    this->rollback= 0;
+  }
+};
+
+static federated_handlerton hton;
+
 struct st_mysql_storage_engine federated_storage_engine=
-{ MYSQL_HANDLERTON_INTERFACE_VERSION };
+{ MYSQL_HANDLERTON_INTERFACE_VERSION, &hton };
 
 mysql_declare_plugin(federated)
 {

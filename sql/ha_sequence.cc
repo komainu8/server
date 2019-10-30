@@ -410,23 +410,27 @@ static int sequence_end(handlerton* hton,
 
 static int sequence_initialize(void *p)
 {
-  handlerton *local_sequence_hton= (handlerton *)p;
   DBUG_ENTER("sequence_initialize");
 
-  local_sequence_hton->db_type= DB_TYPE_SEQUENCE;
-  local_sequence_hton->create= sequence_create_handler;
-  local_sequence_hton->panic= sequence_end;
-  local_sequence_hton->flags= (HTON_NOT_USER_SELECTABLE |
-                               HTON_HIDDEN |
-                               HTON_TEMPORARY_NOT_SUPPORTED |
-                               HTON_ALTER_NOT_SUPPORTED |
-                               HTON_NO_PARTITION);
   DBUG_RETURN(0);
 }
 
+struct hasequence_handlerton : public handlerton
+{
+  hasequence_handlerton()
+  {
+    db_type= DB_TYPE_SEQUENCE;
+    create= sequence_create_handler;
+    panic= sequence_end;
+    flags= HTON_NOT_USER_SELECTABLE | HTON_HIDDEN | HTON_NO_PARTITION |
+           HTON_TEMPORARY_NOT_SUPPORTED | HTON_ALTER_NOT_SUPPORTED;
+  }
+};
+
+static hasequence_handlerton hton;
 
 static struct st_mysql_storage_engine sequence_storage_engine=
-{ MYSQL_HANDLERTON_INTERFACE_VERSION };
+{ MYSQL_HANDLERTON_INTERFACE_VERSION, &hton };
 
 maria_declare_plugin(sql_sequence)
 {

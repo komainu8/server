@@ -176,22 +176,7 @@ int oqgraph_close_connection(handlerton *hton, THD *thd);
 
 static int oqgraph_init(void *p)
 {
-  handlerton *hton= (handlerton *)p;
   DBUG_PRINT( "oq-debug", ("oqgraph_init"));
-
-  hton->db_type= DB_TYPE_AUTOASSIGN;
-  hton->create= oqgraph_create_handler;
-  hton->flags= HTON_ALTER_NOT_SUPPORTED;
-  // Prevent ALTER, because the core crashes when the user provides a
-  // non-existing backing store field for ORIGID, etc
-  // 'Fixes' bug 1134355
-  // HTON_NO_FLAGS;
-
-  hton->table_options= (ha_create_table_option*)oqgraph_table_option_list;
-
-  hton->discover_table_structure= oqgraph_discover_table_structure;
-
-  hton->close_connection = oqgraph_close_connection;
 
   oqgraph_init_done= TRUE;
   return 0;
@@ -1324,8 +1309,28 @@ static const char oqgraph_description[]=
   "Open Query Graph Computation Engine "
   "(http://openquery.com/graph)";
 
+struct oqgraph_handlerton : public handlerton
+{
+  oqgraph_handlerton()
+  {
+    db_type= DB_TYPE_AUTOASSIGN;
+    create= oqgraph_create_handler;
+    flags= HTON_ALTER_NOT_SUPPORTED;
+    // Prevent ALTER, because the core crashes when the user provides a
+    // non-existing backing store field for ORIGID, etc
+    // 'Fixes' bug 1134355
+    // HTON_NO_FLAGS;
+
+    table_options= (ha_create_table_option*)oqgraph_table_option_list;
+    discover_table_structure= oqgraph_discover_table_structure;
+    close_connection = oqgraph_close_connection;
+  }
+};
+
+static oqgraph_handlerton hton;
+
 struct st_mysql_storage_engine oqgraph_storage_engine=
-{ MYSQL_HANDLERTON_INTERFACE_VERSION };
+{ MYSQL_HANDLERTON_INTERFACE_VERSION, &hton };
 
 extern "C" const char* const oqgraph_boost_version;
 

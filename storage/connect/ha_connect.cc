@@ -443,7 +443,13 @@ static MYSQL_THDVAR_ENUM(
 /***********************************************************************/
 /*  The CONNECT handlerton object.                                     */
 /***********************************************************************/
-handlerton *connect_hton= NULL;
+struct connect_handlerton : public handlerton
+{
+  connect_handlerton();
+};
+
+static connect_handlerton hton;
+handlerton *connect_hton= &hton;
 
 /***********************************************************************/
 /*  Function to export session variable values to other source files.  */
@@ -764,15 +770,6 @@ static int connect_init_func(void *p)
 
   init_connect_psi_keys();
 
-  connect_hton= (handlerton *)p;
-  connect_hton->create= connect_create_handler;
-  connect_hton->flags= HTON_TEMPORARY_NOT_SUPPORTED;
-  connect_hton->table_options= connect_table_option_list;
-  connect_hton->field_options= connect_field_option_list;
-  connect_hton->index_options= connect_index_option_list;
-  connect_hton->tablefile_extensions= ha_connect_exts;
-  connect_hton->discover_table_structure= connect_assisted_discovery;
-
   if (trace(128))
     sql_print_information("connect_init: hton=%p", p);
 
@@ -784,6 +781,16 @@ static int connect_init_func(void *p)
   DBUG_RETURN(0);
 } // end of connect_init_func
 
+connect_handlerton::connect_handlerton()
+{
+  create= connect_create_handler;
+  flags= HTON_TEMPORARY_NOT_SUPPORTED;
+  table_options= connect_table_option_list;
+  field_options= connect_field_option_list;
+  index_options= connect_index_option_list;
+  tablefile_extensions= ha_connect_exts;
+  discover_table_structure= connect_assisted_discovery;
+}
 
 /**
   @brief
@@ -7304,7 +7311,7 @@ Item *ha_connect::idx_cond_push(uint keyno_arg, Item* idx_cond_arg)
 
 
 struct st_mysql_storage_engine connect_storage_engine=
-{ MYSQL_HANDLERTON_INTERFACE_VERSION };
+{ MYSQL_HANDLERTON_INTERFACE_VERSION, &hton };
 
 /***********************************************************************/
 /*  CONNECT global variables definitions.                              */

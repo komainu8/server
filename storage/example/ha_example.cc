@@ -107,8 +107,6 @@ static handler *example_create_handler(handlerton *hton,
                                        TABLE_SHARE *table, 
                                        MEM_ROOT *mem_root);
 
-handlerton *example_hton;
-
 static MYSQL_THDVAR_ULONG(varopt_default, PLUGIN_VAR_RQCMDARG,
   "default value of the VAROPT table option", NULL, NULL, 5, 0, 100, 0);
 
@@ -256,16 +254,22 @@ static int example_init_func(void *p)
   init_example_psi_keys();
 #endif
 
-  example_hton= (handlerton *)p;
-  example_hton->create=  example_create_handler;
-  example_hton->flags=   HTON_CAN_RECREATE;
-  example_hton->table_options= example_table_option_list;
-  example_hton->field_options= example_field_option_list;
-  example_hton->tablefile_extensions= ha_example_exts;
-
   DBUG_RETURN(0);
 }
 
+struct example_handlerton : public handlerton
+{
+  example_handlerton()
+  {
+    create= example_create_handler;
+    flags= HTON_CAN_RECREATE;
+    table_options= example_table_option_list;
+    field_options= example_field_option_list;
+    tablefile_extensions= ha_example_exts;
+  }
+};
+
+static example_handlerton hton;
 
 /**
   @brief
@@ -988,7 +992,7 @@ ha_example::check_if_supported_inplace_alter(TABLE* altered_table,
 
 
 struct st_mysql_storage_engine example_storage_engine=
-{ MYSQL_HANDLERTON_INTERFACE_VERSION };
+{ MYSQL_HANDLERTON_INTERFACE_VERSION, &hton };
 
 static ulong srv_enum_var= 0;
 static ulong srv_ulong_var= 0;
