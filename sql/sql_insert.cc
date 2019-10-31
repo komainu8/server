@@ -1728,6 +1728,25 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
   save_read_set=  table->read_set;
   save_write_set= table->write_set;
 
+  auto ok_or_after_trg_err= [thd, table, &trg_error](){
+    if (table->file->inited != handler::NONE)
+    {
+      int error= table->file->ha_index_end();
+      trg_error = trg_error || error;
+    }
+    if (!table->file->has_transactions())
+      thd->transaction.stmt.modified_non_trans_table= TRUE;
+    return trg_error;
+  };
+
+  auto after_trg_and_copied_inc= [thd, info, table, &trg_error](){
+    info->copied++;
+    thd->record_first_successful_insert_id_in_cur_stmt(table->file->insert_id_for_cur_row);
+    trg_error= (table->triggers &&
+                table->triggers->process_triggers(thd, TRG_EVENT_INSERT,
+                                                  TRG_ACTION_AFTER, TRUE));
+  };
+
   if (info->handle_duplicates == DUP_REPLACE ||
       info->handle_duplicates == DUP_UPDATE)
   {
@@ -1763,7 +1782,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
         if (info->ignore)
         {
           table->file->print_error(error, MYF(ME_WARNING));
-          goto ok_or_after_trg_err; /* Ignoring a not fatal error, return 0 */
+          DBUG_RETURN(ok_or_after_trg_err()); /* Ignoring a not fatal error, return 0 */
         }
         goto err;
       }
@@ -1884,7 +1903,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
           /* CHECK OPTION for VIEW ... ON DUPLICATE KEY UPDATE ... */
           res= info->table_list->view_check_option(table->in_use, info->ignore);
           if (res == VIEW_CHECK_SKIP)
-            goto ok_or_after_trg_err;
+            DBUG_RETURN(ok_or_after_trg_err());
           if (res == VIEW_CHECK_ERROR)
             goto before_trg_err;
 
@@ -1902,7 +1921,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
                 if (!(thd->variables.old_behavior &
                       OLD_MODE_NO_DUP_KEY_WARNINGS_WITH_IGNORE))
                   table->file->print_error(error, MYF(ME_WARNING));
-                goto ok_or_after_trg_err;
+                DBUG_RETURN(ok_or_after_trg_err());
               }
               goto err;
             }
@@ -1923,7 +1942,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
                     table->file->print_error(error, MYF(0));
                     trg_error= 1;
                     restore_record(table, record[2]);
-                    goto ok_or_after_trg_err;
+                    DBUG_RETURN(ok_or_after_trg_err());
                   }
                   restore_record(table, record[2]);
                 }
@@ -2011,11 +2030,12 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
             }
             else
               error= 0;   // error was HA_ERR_RECORD_IS_THE_SAME
-            /*
+          /*
             Since we pretend that we have done insert we should call
             its after triggers.
           */
-          goto after_trg_n_copied_inc;
+          after_trg_and_copied_inc();
+          DBUG_RETURN(ok_or_after_trg_err());
         }
         else
         {
@@ -2048,7 +2068,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
                                                   TRG_ACTION_AFTER, TRUE))
             {
               trg_error= 1;
-              goto ok_or_after_trg_err;
+              DBUG_RETURN(ok_or_after_trg_err());
             }
 
             if (likely(!error) && table->file->overlap_ref)
@@ -2081,11 +2101,11 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
         if (error)
         {
           trg_error= 1;
-          goto ok_or_after_trg_err;
+          DBUG_RETURN(ok_or_after_trg_err());
         }
       }
       if (info->handle_duplicates == DUP_UPDATE)
-        goto ok_or_after_trg_err;
+        DBUG_RETURN(ok_or_after_trg_err());
       /*
         If more than one iteration of the above while loop is done, from
         the second one the row being inserted will have an explicit
@@ -2115,25 +2135,11 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
           OLD_MODE_NO_DUP_KEY_WARNINGS_WITH_IGNORE))
       table->file->print_error(error, MYF(ME_WARNING));
     table->file->restore_auto_increment(prev_insert_id);
-    goto ok_or_after_trg_err;
+    DBUG_RETURN(ok_or_after_trg_err());
   }
 
-after_trg_n_copied_inc:
-  info->copied++;
-  thd->record_first_successful_insert_id_in_cur_stmt(table->file->insert_id_for_cur_row);
-  trg_error= (table->triggers &&
-              table->triggers->process_triggers(thd, TRG_EVENT_INSERT,
-                                                TRG_ACTION_AFTER, TRUE));
-
-ok_or_after_trg_err:
-  if (table->file->inited != handler::NONE)
-  {
-    error= table->file->ha_index_end();
-    trg_error = trg_error || error;
-  }
-  if (!table->file->has_transactions())
-    thd->transaction.stmt.modified_non_trans_table= TRUE;
-  DBUG_RETURN(trg_error);
+  after_trg_and_copied_inc();
+  DBUG_RETURN(ok_or_after_trg_err());
 
 err:
   info->last_errno= error;
