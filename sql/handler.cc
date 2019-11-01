@@ -7516,7 +7516,7 @@ int handler::ha_check_overlaps(const uchar *old_data, const uchar* new_data)
         continue;
       }
 
-      if (table->check_period_overlaps(key_info, key_info, new_data, record_buffer))
+      if (table->check_period_overlaps(key_info, key_info, new_data, record_buffer) == 0)
       {
         uint period_key_part_nr= key_parts - 2;
         auto &pstart= key_info.key_part[period_key_part_nr];

@@ -1729,7 +1729,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
   save_write_set= table->write_set;
 
   auto ok_or_after_trg_err= [thd, table, &trg_error](){
-    if (table->file->inited != handler::NONE)
+    if (table->file->inited == handler::INDEX)
     {
       int error= table->file->ha_index_end();
       trg_error = trg_error || error;
@@ -2095,7 +2095,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
                                                table->record[1],
                                                table->record[0]));
 
-      if (table->file->inited != handler::NONE)
+      if (table->file->inited == handler::INDEX)
       {
         error= table->file->ha_index_end();
         if (error)
