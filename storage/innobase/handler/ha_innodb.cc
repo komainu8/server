@@ -5578,7 +5578,7 @@ normalize_table_name_c_low(
 
 create_table_info_t::create_table_info_t(
 	THD*		thd,
-	TABLE*		form,
+	const TABLE*	form,
 	HA_CREATE_INFO*	create_info,
 	char*		table_name,
 	char*		remote_path,
@@ -12738,14 +12738,107 @@ int create_table_info_t::create_table(bool create_fk)
 		}
 	}
 
-	innobase_table = dict_table_open_on_name(
-		m_table_name, TRUE, FALSE, DICT_ERR_IGNORE_NONE);
+	innobase_table = dict_table_open_on_name(m_table_name, true, false,
+						 DICT_ERR_IGNORE_NONE);
+	ut_ad(innobase_table);
 
-	if (innobase_table != NULL) {
-		dict_table_close(innobase_table, TRUE, FALSE);
+	for (dict_index_t* index = dict_table_get_first_index(innobase_table);
+	     index; index = dict_table_get_next_index(index)) {
+
+		if (!row_size_is_acceptable(*index)) {
+			dict_table_close(innobase_table, true, false);
+			DBUG_RETURN(convert_error_code_to_mysql(
+				DB_TOO_BIG_RECORD, m_flags, NULL));
+		}
 	}
 
+	dict_table_close(innobase_table, true, false);
+
 	DBUG_RETURN(0);
+}
+
+bool create_table_info_t::row_size_is_acceptable(
+	const dict_table_t& table) const
+{
+	for (dict_index_t* index = dict_table_get_first_index(&table); index;
+	     index = dict_table_get_next_index(index)) {
+
+		if (!row_size_is_acceptable(*index)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/** Issue a warning that the row is too big. */
+void ib_warn_row_too_big(THD* thd, const dict_table_t* table)
+{
+	/* If prefix is true then a 768-byte prefix is stored
+	locally for BLOB fields. Refer to dict_table_get_format() */
+	const bool prefix = (dict_tf_get_format(table->flags)
+			     == UNIV_FORMAT_A);
+
+	const ulint	free_space = page_get_free_space_of_empty(
+		table->flags & DICT_TF_COMPACT) / 2;
+
+	push_warning_printf(
+		thd, Sql_condition::WARN_LEVEL_WARN, HA_ERR_TO_BIG_ROW,
+		"Row size too large (> " ULINTPF ")."
+		" Changing some columns to TEXT"
+		" or BLOB %smay help. In current row format, BLOB prefix of"
+		" %d bytes is stored inline.", free_space
+		, prefix ? "or using ROW_FORMAT=DYNAMIC or"
+		" ROW_FORMAT=COMPRESSED ": ""
+		, prefix ? DICT_MAX_FIXED_COL_LEN : 0);
+}
+
+
+bool create_table_info_t::row_size_is_acceptable(
+	const dict_index_t& index) const
+{
+	if (index.type & DICT_FTS) {
+		return true;
+	}
+	if (index.type & DICT_FTS
+	    /* Ignore system tables check because innodb_table_stats maximum
+	    row size can not fit on 4k page. */
+	    || index.table->is_system_db) {
+		return true;
+	}
+
+	const bool strict = THDVAR(m_thd, strict_mode);
+
+	dict_index_t::record_size_info_t info = index.record_size_info();
+
+	if (info.row_is_too_big()) {
+		int idx = info.get_first_overrun_field_index();
+		if (idx != INT_MAX) {
+			ut_ad(info.get_overrun_size() != 0);
+			ut_ad(info.max_leaf_size != 0);
+
+			const dict_field_t* field
+				= dict_index_get_nth_field(&index, idx);
+
+			ib::error_or_warn(strict)
+				<< "Cannot add field " << field->name
+				<< " in table " << index.table->name
+				<< " because after adding it, the row size is "
+				<< info.get_overrun_size()
+				<< " which is greater than maximum allowed "
+				   "size ("
+				<< info.max_leaf_size
+				<< " bytes) for a record on index leaf page.";
+		}
+
+		if (strict) {
+			return false;
+		}
+
+		ib_warn_row_too_big(m_thd, index.table);
+	}
+
+	return true;
 }
 
 /** Update a new table in an InnoDB database.
@@ -22163,32 +22256,6 @@ innobase_convert_to_system_charset(
 	return(static_cast<uint>(strconvert(
 				cs1, from, strlen(from),
 				cs2, to, static_cast<uint>(len), errors)));
-}
-
-/**********************************************************************
-Issue a warning that the row is too big. */
-void
-ib_warn_row_too_big(const dict_table_t*	table)
-{
-	/* If prefix is true then a 768-byte prefix is stored
-	locally for BLOB fields. Refer to dict_table_get_format() */
-	const bool prefix = (dict_tf_get_format(table->flags)
-			     == UNIV_FORMAT_A);
-
-	const ulint	free_space = page_get_free_space_of_empty(
-		table->flags & DICT_TF_COMPACT) / 2;
-
-	THD*	thd = current_thd;
-
-	push_warning_printf(
-		thd, Sql_condition::WARN_LEVEL_WARN, HA_ERR_TO_BIG_ROW,
-		"Row size too large (> " ULINTPF ")."
-		" Changing some columns to TEXT"
-		" or BLOB %smay help. In current row format, BLOB prefix of"
-		" %d bytes is stored inline.", free_space
-		, prefix ? "or using ROW_FORMAT=DYNAMIC or"
-		" ROW_FORMAT=COMPRESSED ": ""
-		, prefix ? DICT_MAX_FIXED_COL_LEN : 0);
 }
 
 /** Validate the requested buffer pool size.  Also, reserve the necessary

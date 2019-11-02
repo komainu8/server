@@ -45,11 +45,6 @@ dict_index_t*	dict_ind_redundant;
 extern uint	ibuf_debug;
 #endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
 
-/**********************************************************************
-Issue a warning that the row is too big. */
-void
-ib_warn_row_too_big(const dict_table_t*	table);
-
 #include "btr0btr.h"
 #include "btr0cur.h"
 #include "btr0sea.h"
@@ -2350,18 +2345,14 @@ added column.
 @param[in,out]	index	index; NOTE! The index memory
 			object is freed in this function!
 @param[in]	page_no	root page number of the index
-@param[in]	strict	TRUE=refuse to create the index
-			if records could be too big to fit in
-			an B-tree page
 @param[in]	add_v	new virtual column that being added along with
 			an add index call
-@return DB_SUCCESS, DB_TOO_BIG_RECORD, or DB_CORRUPTION */
+@return DB_SUCCESS, or DB_CORRUPTION */
 dberr_t
 dict_index_add_to_cache(
 	dict_table_t*		table,
 	dict_index_t*		index,
 	ulint			page_no,
-	ibool			strict,
 	const dict_add_v_col_t* add_v)
 {
 	dict_index_t*	new_index;
@@ -2405,19 +2396,6 @@ dict_index_add_to_cache(
 #ifdef MYSQL_INDEX_DISABLE_AHI
 	new_index->disable_ahi = index->disable_ahi;
 #endif
-
-	if (new_index->rec_potentially_too_big(table, strict)) {
-
-		if (strict) {
-			dict_mem_index_free(new_index);
-			dict_mem_index_free(index);
-			return(DB_TOO_BIG_RECORD);
-		} else if (current_thd != NULL) {
-			/* Avoid the warning to be printed
-			during recovery. */
-			ib_warn_row_too_big((const dict_table_t*)table);
-		}
-	}
 
 	n_ord = new_index->n_uniq;
 	/* Flag the ordering columns and also set column max_prefix */
