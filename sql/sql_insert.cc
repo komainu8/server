@@ -1116,7 +1116,9 @@ values_loop_end:
     if (duplic != DUP_ERROR || ignore)
     {
       table->file->extra(HA_EXTRA_NO_IGNORE_DUP_KEY);
-      if (table->file->ha_table_flags() & HA_DUPLICATE_POS)
+      if (table->file->ha_table_flags() & HA_DUPLICATE_POS
+          /* if the index matched was WITHOUT OVERLAPS, RND was already ended */
+          && !table->file->overlap_ref)
         table->file->ha_rnd_end();
     }
 
@@ -1828,6 +1830,11 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
           if (error)
             goto err;
           key_copy(table->key_buffer, table->record[0], &key, 0);
+        }
+
+        if (table->file->inited == handler::RND)
+        {
+          DBUG_ASSERT(table->file->ha_rnd_end() == 0);
         }
         error= table->file->ha_index_init(key_nr, false);
         if (error)
