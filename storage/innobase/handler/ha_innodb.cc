@@ -5929,13 +5929,13 @@ initialize_auto_increment(dict_table_t* table, const Field* field)
 static FOREIGN_KEY_INFO*
 get_foreign_key_info(THD* thd, TABLE_SHARE* s, dict_foreign_t* foreign);
 
-List<FOREIGN_KEY_INFO>*
+FK_list*
 ha_innobase::build_foreign_list(THD* thd, dict_foreign_set& foreign_set,
 				bool& err) const
 {
-	List<FOREIGN_KEY_INFO>* result_list
-		= (List<FOREIGN_KEY_INFO>*)alloc_root(
-			&table->s->mem_root, sizeof(List<FOREIGN_KEY_INFO>));
+	FK_list* result_list
+		= (FK_list*)alloc_root(
+			&table->s->mem_root, sizeof(FK_list));
 	if (unlikely(!result_list)) {
 		err = true;
 		return NULL;
@@ -6243,6 +6243,8 @@ no_such_table:
 
 	info(HA_STATUS_NO_LOCK | HA_STATUS_VARIABLE | HA_STATUS_CONST | HA_STATUS_OPEN);
 
+	/* Non-null s->referenced_keys now temporarily serves as indicator of
+	   initialized FK structures. This will change when FK info will be loaded from FRM */
 	if (!table->s->referenced_keys
 	    && table->s->tmp_table == NO_TMP_TABLE) {
 		bool err = false;
@@ -6264,7 +6266,7 @@ no_such_table:
 				/* Assign some empty list to indicate that we
 				don't need to initialize this TABLE_SHARE
 				anymore. */
-				static List<FOREIGN_KEY_INFO> empty_list;
+				static FK_list empty_list;
 				DBUG_ASSERT(empty_list.is_empty());
 				table->s->referenced_keys = &empty_list;
 			}

@@ -44,6 +44,7 @@
 #include <mysql/psi/mysql_table.h>
 #include "sql_sequence.h"
 #include "mem_root_array.h"
+#include <set>
 
 class Alter_info;
 class Virtual_column_info;
@@ -1030,6 +1031,12 @@ struct TABLE_SHARE;
 struct HA_CREATE_INFO;
 struct st_foreign_key_info;
 typedef struct st_foreign_key_info FOREIGN_KEY_INFO;
+struct Table_name;
+class FK_list : public List<FOREIGN_KEY_INFO>
+{
+public:
+  bool get(THD *thd, std::set<Table_name> &result, LEX_CSTRING &col_name);
+};
 typedef bool (stat_print_fn)(THD *thd, const char *type, size_t type_len,
                              const char *file, size_t file_len,
                              const char *status, size_t status_len);

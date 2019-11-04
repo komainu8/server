@@ -5111,8 +5111,8 @@ bool TABLE_SHARE::update_foreign_keys(THD *thd, Alter_info *alter_info)
 
     if (!foreign_keys)
     {
-      foreign_keys= (List <FOREIGN_KEY_INFO> *) alloc_root(
-        &mem_root, sizeof(List <FOREIGN_KEY_INFO>));
+      foreign_keys= (FK_list *) alloc_root(
+        &mem_root, sizeof(FK_list));
       if (unlikely(!foreign_keys))
       {
         my_error(ER_OUT_OF_RESOURCES, MYF(0));
@@ -7743,6 +7743,28 @@ static void require_trx_id_error(const char *field, const char *table)
 {
   my_error(ER_VERS_FIELD_WRONG_TYPE, MYF(0), field, "BIGINT(20) UNSIGNED",
            table);
+}
+
+bool FK_list::get(THD *thd, std::set<Table_name> &result, LEX_CSTRING &col_name)
+{
+  List_iterator_fast<FOREIGN_KEY_INFO> it(*this);
+  List_iterator_fast<LEX_CSTRING> col_it;
+  while (FOREIGN_KEY_INFO *fk= it++)
+  {
+    col_it.init(fk->foreign_fields);
+    while (LEX_CSTRING* name= col_it++)
+    {
+      if (!my_strcasecmp(system_charset_info, name->str, col_name.str))
+      {
+        Table_name n;
+        if (n.clone(*fk->referenced_db, *fk->referenced_table, thd->mem_root))
+          return true;
+        result.insert(n);
+        break;
+      }
+    }
+  }
+  return false;
 }
 
 

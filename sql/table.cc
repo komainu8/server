@@ -9312,6 +9312,7 @@ bool TABLE_SHARE::check_and_close_foreign_tables(THD* thd, bool force)
     else
     {
 need_close:
+      // FIXME: First acquire ticket and then lock share
       MDL_request_list mdl_requests;
       MDL_request target_mdl_request;
 

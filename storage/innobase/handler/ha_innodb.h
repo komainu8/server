@@ -501,7 +501,7 @@ protected:
         bool                    m_mysql_has_locked;
 
 private:
-	List<FOREIGN_KEY_INFO>*
+	FK_list*
 	build_foreign_list(THD* thd, dict_foreign_set& foreign_set,
 			   bool& err) const;
 };

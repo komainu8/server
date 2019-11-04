@@ -1297,7 +1297,7 @@ private:
                                              qc_engine_callback
                                              *engine_callback,
                                              ulonglong *engine_data);
-  List<FOREIGN_KEY_INFO> *build_foreign_list(bool &err, bool referenced);
+  FK_list *build_foreign_list(bool &err, bool referenced);
 };
 
 #ifdef __cplusplus

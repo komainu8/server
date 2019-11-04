@@ -41,6 +41,11 @@ class Lex_cstring : public LEX_CSTRING
     str= start;
     length= end - start;
   }
+  Lex_cstring(const LEX_CSTRING &src)
+  {
+    str= src.str;
+    length= src.length;
+  }
   void set(const char *_str, size_t _len)
   {
     str= _str;
@@ -64,6 +69,19 @@ class Lex_cstring : public LEX_CSTRING
     dst->length= length;
     return dst;
   }
+  bool operator< (const Lex_cstring& rhs) const
+  {
+    return length < rhs.length || (length == rhs.length && memcmp(str, rhs.str, length) < 0);
+  }
+  bool operator== (const Lex_cstring& rhs) const
+  {
+    return length == rhs.length && 0 == memcmp(str, rhs.str, length);
+  }
+  bool operator> (const Lex_cstring& rhs) const
+  {
+    return length > rhs.length || (length == rhs.length && memcmp(str, rhs.str, length) > 0);
+  }
+
 };
 
 

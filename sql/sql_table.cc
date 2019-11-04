@@ -7970,7 +7970,8 @@ bool
 mysql_prepare_alter_table(THD *thd, TABLE *table,
                           HA_CREATE_INFO *create_info,
                           Alter_info *alter_info,
-                          Alter_table_ctx *alter_ctx)
+                          Alter_table_ctx *alter_ctx,
+                          std::set<Table_name> *ref_tables)
 {
   /* New column definitions are added here */
   List<Create_field> new_create_list;
@@ -8077,7 +8078,7 @@ mysql_prepare_alter_table(THD *thd, TABLE *table,
         break;
     }
     /*
-      DROP COLULMN xxx
+      DROP COLUMN xxx
       1. it does not see INVISIBLE_SYSTEM columns
       2. otherwise, normally a column is dropped
       3. unless it's a system versioning column (but see below).
@@ -8146,6 +8147,17 @@ mysql_prepare_alter_table(THD *thd, TABLE *table,
     if (def && field->invisible < INVISIBLE_SYSTEM)
     {						// Field is changed
       def->field=field;
+      if (ref_tables && table->s->foreign_keys &&
+          alter_info->flags & ALTER_RENAME_COLUMN &&
+          my_strcasecmp(system_charset_info, def->change.str,
+                        def->field_name.str))
+      {
+        if (table->s->foreign_keys->get(thd, *ref_tables, def->change))
+        {
+          my_error(ER_OUT_OF_RESOURCES, MYF(0));
+          DBUG_RETURN(1);
+        }
+      }
       /*
         Add column being updated to the list of new columns.
         Note that columns with AFTER clauses are added to the end
@@ -8693,6 +8705,29 @@ mysql_prepare_alter_table(THD *thd, TABLE *table,
       case Alter_drop::FOREIGN_KEY:
         // Leave the DROP FOREIGN KEY names in the alter_info->drop_list.
         break;
+      }
+    }
+  }
+
+  if (ref_tables)
+  {
+    /* These referenced tables need to be updated, lock them now
+       and close after this alter command succeeds. */
+    std::set<Table_name>::const_iterator it;
+    for (it= ref_tables->begin(); it != ref_tables->end(); ++it)
+    {
+      MDL_request_list mdl_list;
+      MDL_request mdl_request;
+
+      mdl_request.init(MDL_key::TABLE, it->db.str, it->table_name.str,
+                       MDL_EXCLUSIVE, MDL_TRANSACTION);
+      mdl_list.push_front(&mdl_request);
+      if (thd->mdl_context.acquire_locks(&mdl_list,
+                                         thd->variables.lock_wait_timeout))
+      {
+        push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE, ER_UNKNOWN_ERROR,
+                            "Could not lock '%s.%s'", it->db.str, it->table_name.str);
+        goto err;
       }
     }
   }
@@ -9770,8 +9805,9 @@ do_continue:;
   }
 #endif
 
+  std::set<Table_name> ref_tables;
   if (mysql_prepare_alter_table(thd, table, create_info, alter_info,
-                                &alter_ctx))
+                                &alter_ctx, &ref_tables))
   {
     DBUG_RETURN(true);
   }
@@ -10410,7 +10446,18 @@ do_continue:;
   }
 
 end_inplace:
-
+  {
+    std::set<Table_name>::const_iterator it;
+    for (it= ref_tables.begin(); it != ref_tables.end(); ++it)
+    {
+      TDC_element *el= tdc_lock_share(thd, it->db.str, it->table_name.str);
+      if (el)
+      {
+        tdc_unlock_share(el);
+        close_all_tables_for_name(thd, el->share, HA_EXTRA_NOT_USED, NULL);
+      }
+    }
+  }
   if (thd->locked_tables_list.reopen_tables(thd, false))
     goto err_with_mdl_after_alter;
 

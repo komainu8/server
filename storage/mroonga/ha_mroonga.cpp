@@ -4904,10 +4904,9 @@ error:
   DBUG_RETURN(error);
 }
 
-List<FOREIGN_KEY_INFO> *ha_mroonga::build_foreign_list(bool &err,
-                                                       bool referenced)
+FK_list *ha_mroonga::build_foreign_list(bool &err, bool referenced)
 {
-  List<FOREIGN_KEY_INFO> fk_list;
+  FK_list fk_list;
   THD *thd= ha_thd();
   MEM_ROOT *old_root= thd->mem_root;
   thd->mem_root= &table->s->mem_root;
@@ -4924,8 +4923,8 @@ List<FOREIGN_KEY_INFO> *ha_mroonga::build_foreign_list(bool &err,
   if (fk_list.is_empty())
     return NULL;
 
-  List<FOREIGN_KEY_INFO> *result_list= (List<FOREIGN_KEY_INFO> *) alloc_root(
-      &table->s->mem_root, sizeof(List<FOREIGN_KEY_INFO>));
+  FK_list *result_list= (FK_list *) alloc_root(
+      &table->s->mem_root, sizeof(FK_list));
   if (unlikely(!result_list))
   {
     err= true;
@@ -4983,7 +4982,7 @@ int ha_mroonga::open(const char *name,
       {
         /* Assign some empty list to indicate that we don't need to initialize
          * this TABLE_SHARE anymore. */
-        static List<FOREIGN_KEY_INFO> empty_list;
+        static FK_list empty_list;
         DBUG_ASSERT(empty_list.is_empty());
         table->s->referenced_keys= &empty_list;
       }

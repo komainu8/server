@@ -611,6 +611,7 @@ struct TABLE_STATISTICS_CB
   bool histograms_are_read;   
 };
 
+
 /**
   This structure is shared between different table objects. There is one
   instance of table share per one table in the database.
@@ -644,8 +645,8 @@ struct TABLE_SHARE
   Field **field;
   Field **found_next_number_field;
   KEY  *key_info;			/* data of keys in database */
-  List <FOREIGN_KEY_INFO> *foreign_keys;
-  List <FOREIGN_KEY_INFO> *referenced_keys;
+  FK_list *foreign_keys;
+  FK_list *referenced_keys;
   bool update_foreign_keys(THD *thd, Alter_info *alter_info);
   bool check_foreign_keys(THD *thd);
   bool referenced_by_foreign_key() const
@@ -1663,6 +1664,40 @@ struct All_share_tables
   static inline TABLE ***prev_ptr(TABLE *l)
   {
     return &l->share_all_prev;
+  }
+};
+
+struct Table_name
+{
+  Lex_cstring db;
+  Lex_cstring table_name;
+
+  Table_name() {}
+  Table_name(LEX_CSTRING &_db, LEX_CSTRING &_table_name) :
+    db(_db), table_name(_table_name) {}
+  bool clone(LEX_CSTRING &_db, LEX_CSTRING &_table_name, MEM_ROOT *mem_root)
+  {
+    db.length= _db.length;
+    table_name.length= _table_name.length;
+    if (db.length)
+    {
+      db.str= (const char *) memdup_root(mem_root, _db.str, db.length + 1);
+      if (!db.str)
+        return true;
+    }
+    if (table_name.length)
+    {
+      table_name.str= (const char *) memdup_root(mem_root, _table_name.str, table_name.length + 1);
+      if (!table_name.str)
+        return true;
+    }
+    return false;
+  }
+  Table_name(TABLE &t) :
+    db(t.s->db), table_name(t.s->table_name) {}
+  bool operator<(const Table_name &rhs) const
+  {
+    return db < rhs.db || table_name < rhs.table_name;
   }
 };
 
