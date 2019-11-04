@@ -2100,7 +2100,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
                && table->check_period_overlaps(table->key_info[key_nr],
                                                table->key_info[key_nr],
                                                table->record[1],
-                                               table->record[0]));
+                                               table->record[0]) == 0);
 
       if (table->file->inited == handler::INDEX)
       {
