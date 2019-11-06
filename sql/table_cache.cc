@@ -1110,7 +1110,12 @@ bool tdc_remove_table(THD *thd, enum_tdc_remove_table_type remove_type,
     DBUG_RETURN(false);
   }
 
-  DBUG_ASSERT(element != MY_ERRPTR); // What can we do about it?
+  if (element == MY_ERRPTR)
+  {
+    mysql_mutex_unlock(&LOCK_unused_shares);
+    my_error(ER_OUT_OF_RESOURCES, MYF(ME_FATAL));
+    DBUG_RETURN(false);
+  }
 
   if (!element->ref_count)
   {

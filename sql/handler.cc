@@ -5555,6 +5555,11 @@ bool ha_table_exists(THD *thd, const LEX_CSTRING *db, const LEX_CSTRING *table_n
     tdc_unlock_share(element);
     DBUG_RETURN(TRUE);
   }
+  if (element == MY_ERRPTR)
+  {
+    my_error(ER_OUT_OF_RESOURCES, MYF(0));
+    DBUG_RETURN(0);
+  }
 
   char path[FN_REFLEN + 1];
   size_t path_len = build_table_filename(path, sizeof(path) - 1,
