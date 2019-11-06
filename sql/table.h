@@ -653,7 +653,7 @@ struct TABLE_SHARE
   {
     return referenced_keys && !referenced_keys->is_empty();
   }
-  bool check_and_close_foreign_tables(THD *thd, bool force= false);
+  bool check_and_close_ref_tables(THD *thd, bool remove= false);
 
   Virtual_column_info **check_constraints;
   uint	*blob_field;			/* Index to blobs in Field arrray*/
@@ -1107,6 +1107,8 @@ public:
   }
   bool is_truncated_value() { return truncated_value; }
 };
+
+bool check_and_close_ref_tables(THD *thd, TABLE_LIST *t, bool remove);
 
 
 /* Information for one open table */

@@ -2436,6 +2436,12 @@ int mysql_rm_table_no_locks(THD *thd, TABLE_LIST *tables, bool if_exists,
     {
       char *end;
       int frm_delete_error= 0;
+
+      if (check_and_close_ref_tables(thd, table, true))
+      {
+        error= 1;
+        goto err;
+      }
       /*
         It could happen that table's share in the table definition cache
         is the only thing that keeps the engine plugin loaded
@@ -9723,7 +9729,7 @@ do_continue:;
 
   if (alter_info->flags & ALTER_DROP_FOREIGN_KEY && table->s->foreign_keys)
   {
-    if (table->s->check_and_close_foreign_tables(thd, true))
+    if (table->s->check_and_close_ref_tables(thd))
       DBUG_RETURN(true);
   }
 
@@ -10451,6 +10457,11 @@ end_inplace:
     for (it= ref_tables.begin(); it != ref_tables.end(); ++it)
     {
       TDC_element *el= tdc_lock_share(thd, it->db.str, it->table_name.str);
+      if (el == MY_ERRPTR)
+      {
+        my_error(ER_OUT_OF_RESOURCES, MYF(0));
+        goto err_with_mdl_after_alter;
+      }
       if (el)
       {
         tdc_unlock_share(el);

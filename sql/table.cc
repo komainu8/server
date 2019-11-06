@@ -9284,35 +9284,32 @@ bool fk_modifies_child(enum_fk_option opt)
   return can_write[opt];
 }
 
-bool TABLE_SHARE::check_and_close_foreign_tables(THD* thd, bool force)
+bool TABLE_SHARE::check_and_close_ref_tables(THD* thd, bool remove)
 {
   DBUG_ASSERT(foreign_keys);
+  bool force= true;
   List_iterator_fast<FOREIGN_KEY_INFO> it(*foreign_keys);
-  List_iterator_fast<FOREIGN_KEY_INFO> ref_it;
+  List_iterator<FOREIGN_KEY_INFO> ref_it;
   while (FOREIGN_KEY_INFO *fk= it++)
   {
     if (!cmp(fk->referenced_db, &db) && !cmp(fk->referenced_table, &table_name))
+    {
+      /* Skip self-references */
       continue;
+    }
     TDC_element *el= tdc_lock_share(thd, fk->referenced_db->str, fk->referenced_table->str);
     if (!el)
       continue;
-    if (!force && el->share->referenced_by_foreign_key())
+    if (el == MY_ERRPTR)
     {
-      FOREIGN_KEY_INFO *ref;
-      ref_it.init(*el->share->referenced_keys);
-      while ((ref= ref_it++))
-      {
-        if (!cmp(ref->foreign_db, &db) && !cmp(ref->foreign_table, &table_name))
-          break;
-      }
-      if (!ref)
-        goto need_close;
-      tdc_unlock_share(el);
+      my_error(ER_OUT_OF_RESOURCES, MYF(0));
+      return true;
     }
-    else
+    DBUG_ASSERT(el->share->referenced_keys);
+    if (!remove)
     {
-need_close:
       // FIXME: First acquire ticket and then lock share
+      // FIXME: Correct acquire order
       MDL_request_list mdl_requests;
       MDL_request target_mdl_request;
 
@@ -9322,10 +9319,42 @@ need_close:
       mdl_requests.push_front(&target_mdl_request);
       tdc_unlock_share(el);
       if (thd->mdl_context.acquire_locks(&mdl_requests,
-                                         thd->variables.lock_wait_timeout))
+                                          thd->variables.lock_wait_timeout))
         return true;
       close_all_tables_for_name(thd, el->share, HA_EXTRA_NOT_USED, NULL);
     }
+    else
+    {
+      FOREIGN_KEY_INFO *ref;
+      ref_it.init(*el->share->referenced_keys);
+      while ((ref= ref_it++))
+      {
+        if (!cmp(ref->foreign_db, &db) && !cmp(ref->foreign_table, &table_name))
+          ref_it.remove();
+      }
+      tdc_unlock_share(el);
+    }
+  }
+  return false;
+}
+
+bool check_and_close_ref_tables(THD *thd, TABLE_LIST *t, bool remove)
+{
+  TDC_element *el= tdc_lock_share(thd, t->db.str, t->table_name.str);
+  if (el == MY_ERRPTR)
+  {
+    my_error(ER_OUT_OF_RESOURCES, MYF(0));
+    return true;
+  }
+  if (el)
+  {
+    if (el->share->foreign_keys &&
+        el->share->check_and_close_ref_tables(thd, remove))
+    {
+      tdc_unlock_share(el);
+      return true;
+    }
+    tdc_unlock_share(el);
   }
   return false;
 }
@@ -9354,6 +9383,11 @@ bool TABLE_SHARE::check_foreign_keys(THD *thd)
                             "Foreign table %s.%s not exists",
                             rk->foreign_db->str,
                             rk->foreign_table->str);
+        return true;
+      }
+      if (el == MY_ERRPTR)
+      {
+        my_error(ER_OUT_OF_RESOURCES, MYF(0));
         return true;
       }
       fk_it.init(*el->share->foreign_keys);

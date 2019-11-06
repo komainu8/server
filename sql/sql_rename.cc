@@ -286,17 +286,8 @@ do_rename(THD *thd, TABLE_LIST *ren_table, const LEX_CSTRING *new_db,
   if (ha_table_exists(thd, &ren_table->db, &old_alias, &hton) && hton)
   {
     DBUG_ASSERT(!thd->locked_tables_mode);
-    TDC_element *el= tdc_lock_share(thd, ren_table->db.str, ren_table->table_name.str);
-    if (el)
-    {
-      if (el->share->foreign_keys &&
-          el->share->check_and_close_foreign_tables(thd, true))
-      {
-        tdc_unlock_share(el);
-        DBUG_RETURN(1);
-      }
-      tdc_unlock_share(el);
-    }
+    if (check_and_close_ref_tables(thd, ren_table, false))
+       DBUG_RETURN(1);
     tdc_remove_table(thd, TDC_RT_REMOVE_ALL,
                      ren_table->db.str, ren_table->table_name.str, false);
 

@@ -5101,6 +5101,10 @@ int handler::calculate_checksum()
 bool TABLE_SHARE::update_foreign_keys(THD *thd, Alter_info *alter_info)
 {
   DBUG_ASSERT(!foreign_keys);
+  static FK_list empty_list;
+  DBUG_ASSERT(empty_list.is_empty());
+  referenced_keys = &empty_list;
+
   List_iterator_fast<Key> key_it(alter_info->key_list);
   MEM_ROOT *old_root= thd->mem_root;
   thd->mem_root= &mem_root;
@@ -5108,6 +5112,8 @@ bool TABLE_SHARE::update_foreign_keys(THD *thd, Alter_info *alter_info)
   {
     if (key->type != Key::FOREIGN_KEY)
       continue;
+
+    Foreign_key *src= static_cast<Foreign_key*>(key);
 
     if (!foreign_keys)
     {
@@ -5122,7 +5128,6 @@ bool TABLE_SHARE::update_foreign_keys(THD *thd, Alter_info *alter_info)
       foreign_keys->empty();
     }
 
-    Foreign_key *src= static_cast<Foreign_key*>(key);
     FOREIGN_KEY_INFO *dst= (FOREIGN_KEY_INFO *) alloc_root(
       &mem_root, sizeof(FOREIGN_KEY_INFO));
     if (unlikely(foreign_keys->push_back(dst)))
@@ -5135,7 +5140,7 @@ bool TABLE_SHARE::update_foreign_keys(THD *thd, Alter_info *alter_info)
     dst->foreign_db= &db;
     dst->foreign_table= &table_name;
     dst->referenced_key_name= &src->name;
-    dst->referenced_db= &src->ref_db;
+    dst->referenced_db= src->ref_db.str ? &src->ref_db : &db;
     dst->referenced_table= &src->ref_table;
     dst->update_method= src->update_opt;
     dst->delete_method= src->delete_opt;
@@ -5166,6 +5171,8 @@ bool TABLE_SHARE::update_foreign_keys(THD *thd, Alter_info *alter_info)
     }
   }
   thd->mem_root= old_root;
+  if (foreign_keys && check_and_close_ref_tables(thd))
+    return true;
   return false;
 }
 
