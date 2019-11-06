@@ -1534,7 +1534,7 @@ bool mysql_prepare_insert(THD *thd, TABLE_LIST *table_list,
     }
   }
 
-  if (duplic == DUP_UPDATE)
+  if (duplic != DUP_ERROR)
   {
     /* it should be allocated before Item::fix_fields() */
     if (table_list->set_insert_values(thd->mem_root))
@@ -1715,6 +1715,7 @@ static void setup_period_conds(THD *thd, TABLE *table,
     0     - success
     non-0 - error
 */
+#define get_month(field, record) (uint3korr((field)->ptr_in_record(record)) >>5) & 15
 
 
 int write_record(THD *thd, TABLE *table,COPY_INFO *info)
@@ -1863,6 +1864,9 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
         table->move_fields(table->field, table->record[0], table->record[1]);
       }
 
+      DBUG_ASSERT(table->insert_values != NULL);
+      store_record(table,insert_values);
+
       do
       {
         if (info->handle_duplicates == DUP_UPDATE)
@@ -1873,8 +1877,6 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
             that matches, is updated. If update causes a conflict again,
             an error is returned
           */
-          DBUG_ASSERT(table->insert_values != NULL);
-          store_record(table,insert_values);
           restore_record(table,record[1]);
           table->reset_default_fields();
 
@@ -2100,7 +2102,7 @@ int write_record(THD *thd, TABLE *table,COPY_INFO *info)
                && table->check_period_overlaps(table->key_info[key_nr],
                                                table->key_info[key_nr],
                                                table->record[1],
-                                               table->record[0]) == 0);
+                                               table->insert_values) == 0);
 
       if (table->file->inited == handler::INDEX)
       {
