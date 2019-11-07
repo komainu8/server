@@ -451,7 +451,9 @@ void TABLE_SHARE::destroy()
   DBUG_ENTER("TABLE_SHARE::destroy");
   DBUG_PRINT("info", ("db: %s table: %s", db.str, table_name.str));
 
-  DBUG_ASSERT(!check_foreign_keys(current_thd));
+  DBUG_ASSERT(!current_thd ||
+              current_thd->lex->sql_command != SQLCOM_FLUSH ||
+              !check_foreign_keys(current_thd));
 
   if (ha_share)
   {
@@ -9284,12 +9286,30 @@ bool fk_modifies_child(enum_fk_option opt)
   return can_write[opt];
 }
 
+
+class Tmp_mem_root : public MEM_ROOT
+{
+public:
+  Tmp_mem_root()
+  {
+    init_sql_alloc(this, "Tmp_mem_root", ALLOC_ROOT_SET, 0,
+                   MYF(MY_THREAD_SPECIFIC));
+  }
+  ~Tmp_mem_root()
+  {
+    free_root(this, MYF(0));
+  }
+};
+
+// FIXME: move to sql_table.cc
+// FIXME: check acquire order
 bool TABLE_SHARE::check_and_close_ref_tables(THD* thd, bool remove)
 {
   DBUG_ASSERT(foreign_keys);
-  bool force= true;
+  MDL_request_list mdl_list;
   List_iterator_fast<FOREIGN_KEY_INFO> it(*foreign_keys);
   List_iterator<FOREIGN_KEY_INFO> ref_it;
+  Tmp_mem_root tmp_root;
   while (FOREIGN_KEY_INFO *fk= it++)
   {
     if (!cmp(fk->referenced_db, &db) && !cmp(fk->referenced_table, &table_name))
@@ -9308,20 +9328,11 @@ bool TABLE_SHARE::check_and_close_ref_tables(THD* thd, bool remove)
     DBUG_ASSERT(el->share->referenced_keys);
     if (!remove)
     {
-      // FIXME: First acquire ticket and then lock share
-      // FIXME: Correct acquire order
-      MDL_request_list mdl_requests;
-      MDL_request target_mdl_request;
+      MDL_request *req= new (&tmp_root) MDL_request;
 
-      target_mdl_request.init(MDL_key::TABLE,
-                              el->share->db.str, el->share->table_name.str,
-                              MDL_EXCLUSIVE, MDL_STATEMENT);
-      mdl_requests.push_front(&target_mdl_request);
-      tdc_unlock_share(el);
-      if (thd->mdl_context.acquire_locks(&mdl_requests,
-                                          thd->variables.lock_wait_timeout))
-        return true;
-      close_all_tables_for_name(thd, el->share, HA_EXTRA_NOT_USED, NULL);
+      req->init(MDL_key::TABLE, el->share->db.str, el->share->table_name.str,
+                MDL_EXCLUSIVE, MDL_STATEMENT);
+      mdl_list.push_front(req);
     }
     else
     {
@@ -9332,7 +9343,18 @@ bool TABLE_SHARE::check_and_close_ref_tables(THD* thd, bool remove)
         if (!cmp(ref->foreign_db, &db) && !cmp(ref->foreign_table, &table_name))
           ref_it.remove();
       }
-      tdc_unlock_share(el);
+    }
+    tdc_unlock_share(el);
+  }
+  if (!mdl_list.is_empty())
+  {
+    if (thd->mdl_context.acquire_locks(&mdl_list, thd->variables.lock_wait_timeout))
+      return true;
+    MDL_request_list::Iterator it(mdl_list);
+    while (MDL_request *req= it++)
+    {
+      tdc_remove_table(thd, TDC_RT_REMOVE_ALL, req->key.db_name(), req->key.name(), FALSE);
+//       close_all_tables_for_name(thd, el->share, HA_EXTRA_NOT_USED, NULL);
     }
   }
   return false;
@@ -9433,6 +9455,85 @@ bool TABLE_SHARE::check_foreign_keys(THD *thd)
       }
     }
   }
+  return false;
+}
+
+// Fill FK info for CREATE TABLE from alter_info
+bool TABLE_SHARE::update_foreign_keys(THD *thd, Alter_info *alter_info)
+{
+  DBUG_ASSERT(!foreign_keys);
+  static FK_list empty_list;
+  DBUG_ASSERT(empty_list.is_empty());
+  referenced_keys = &empty_list;
+
+  List_iterator_fast<Key> key_it(alter_info->key_list);
+  MEM_ROOT *old_root= thd->mem_root;
+  thd->mem_root= &mem_root;
+  while (Key* key= key_it++)
+  {
+    if (key->type != Key::FOREIGN_KEY)
+      continue;
+
+    Foreign_key *src= static_cast<Foreign_key*>(key);
+
+    if (!foreign_keys)
+    {
+      foreign_keys= (FK_list *) alloc_root(
+        &mem_root, sizeof(FK_list));
+      if (unlikely(!foreign_keys))
+      {
+        my_error(ER_OUT_OF_RESOURCES, MYF(0));
+        thd->mem_root= old_root;
+        return true;
+      }
+      foreign_keys->empty();
+    }
+
+    FOREIGN_KEY_INFO *dst= (FOREIGN_KEY_INFO *) alloc_root(
+      &mem_root, sizeof(FOREIGN_KEY_INFO));
+    if (unlikely(foreign_keys->push_back(dst)))
+    {
+      my_error(ER_OUT_OF_RESOURCES, MYF(0));
+      thd->mem_root= old_root;
+      return true;
+    }
+    dst->foreign_id= &src->constraint_name;
+    dst->foreign_db= &db;
+    dst->foreign_table= &table_name;
+    dst->referenced_key_name= &src->name;
+    dst->referenced_db= src->ref_db.str ? &src->ref_db : &db;
+    dst->referenced_table= &src->ref_table;
+    dst->update_method= src->update_opt;
+    dst->delete_method= src->delete_opt;
+    dst->foreign_fields.empty();
+    dst->referenced_fields.empty();
+
+    Key_part_spec* col;
+    List_iterator_fast<Key_part_spec> col_it(src->columns);
+    while ((col= col_it++))
+    {
+      if (unlikely(dst->foreign_fields.push_back(&col->field_name)))
+      {
+        my_error(ER_OUT_OF_RESOURCES, MYF(0));
+        thd->mem_root= old_root;
+        return true;
+      }
+    }
+
+    col_it.init(src->ref_columns);
+    while ((col= col_it++))
+    {
+      if (unlikely(dst->referenced_fields.push_back(&col->field_name)))
+      {
+        my_error(ER_OUT_OF_RESOURCES, MYF(0));
+        thd->mem_root= old_root;
+        return true;
+      }
+    }
+  }
+  thd->mem_root= old_root;
+  if (foreign_keys && check_and_close_ref_tables(thd))
+    return true;
   return false;
 }
 
