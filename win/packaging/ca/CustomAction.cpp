@@ -32,6 +32,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 #include <shellapi.h>
 #include <stdlib.h>
 #include <winservice.h>
+#include <string>
+#include <iostream>
+#include <filesystem>
+#include <fstream>
+#include <map>
+
+using namespace std;
+using namespace std::filesystem;
 
 #define ONE_MB 1048576
 UINT ExecRemoveDataDirectory(wchar_t *dir)
@@ -467,6 +475,7 @@ extern "C" UINT CheckDBInUse(MSIHANDLE hInstall)
   WcaGetProperty(L"SERVICENAME", &servicename);
   WcaGetProperty(L"DATADIR", &datadir);
   WcaGetFormattedString(L"[INSTALLDIR]bin\\", &bindir);
+
   WcaLog(LOGMSG_STANDARD,"SERVICENAME=%S, DATADIR=%S, bindir=%S",
     servicename, datadir, bindir);
 
@@ -1002,4 +1011,131 @@ extern "C" BOOL WINAPI DllMain(
   }
 
   return TRUE;
+}
+
+inline bool checkIfFileExists (wstring& name) {
+  ifstream f(name.c_str());
+  return f.good();
+}
+
+wstring symlink_from[]= {L"mysql.exe", L"mysqlaccess.exe", L"mysqladmin.exe", L"mariabackup.exe", L"mysqlbinlog.exe", L"mysqlcheck.exe",
+                         L"mysql_client_test_embedded.exe", L"mysql_client_test.exe", L"mariadb_config.exe", L"mysql_convert_table_format.exe",
+                         L"mysqldump.exe", L"mysqldumpslow.exe", L"mysql_embedded.exe", L"mysql_find_rows.exe", L"mysql_fix_extensions.exe",
+                         L"mysqlhotcopy.exe", L"mysqlimport.exe", L"mysql_install_db.exe", L"mysql_ldb.exe", L"mysql_plugin.exe",
+                         L"mysql_secure_installation.exe", L"mysql_setpermission.exe", L"mysqlshow.exe", L"mysqlslap.exe",
+                         L"mysqltest.exe", L"mysqltest_embedded.exe", L"mysql_tzinfo_to_sql.exe", L"mysql_upgrade.exe",
+                         L"mysql_upgrade_service.exe", L"mysql_upgrade_wizard.exe", L"mysql_waitpid.exe", L"mysqld.exe", L"mysqld_multi.exe",
+                         L"mysqld_safe.exe", L"mysqld_safe_helper.exe"};
+
+wstring symlink_to[]= {L"mariadb.exe", L"mariadb-access.exe", L"mariadb-admin.exe", L"mariadb-backup.exe", L"mariadb-binlog.exe", L"mariadb-check.exe",
+                       L"mariadb-client-test-embedded.exe", L"mariadb-client-test.exe", L"mariadb-config.exe", L"mariadb-convert-table-format.exe",
+                       L"mariadb-dump.exe", L"mariadb-dumpslow.exe", L"mariadb-embedded.exe", L"mariadb-find-rows.exe", L"mariadb-fix-extensions.exe",
+                       L"mariadb-hotcopy.exe", L"mariadb-import.exe", L"mariadb-install-db.exe", L"mariadb-ldb.exe", L"mariadb-plugin.exe",
+                       L"mariadb-secure-installation.exe", L"mariadb-setpermission.exe", L"mariadb-show.exe", L"mariadb-slap.exe",
+                       L"mariadb-test.exe", L"mariadb-test-embedded.exe", L"mariadb-tzinfo-to-sql.exe", L"mariadb-upgrade.exe",
+                       L"mariadb-upgrade-service.exe", L"mariadb-upgrade-wizard.exe", L"mariadb-waitpid.exe", L"mariadbd.exe", L"mariadbd-multi.exe",
+                       L"mariadbd-safe.exe", L"mariadbd-safe-helper.exe"};
+
+/* MDEV-19781 MariaDB symlinks on Windows */
+extern "C" UINT __stdcall CreateSymlinks(MSIHANDLE hInstall)
+{
+  HRESULT hr = S_OK;
+  UINT er = ERROR_SUCCESS;
+  wchar_t installDir[MAX_PATH];
+  DWORD len = MAX_PATH;
+  wchar_t installerVersion[MAX_VERSION_PROPERTY_SIZE];
+  DWORD size = MAX_VERSION_PROPERTY_SIZE;
+  wchar_t binDir[MAX_PATH];
+  size_t blen = NULL;
+
+  hr = WcaInitialize(hInstall, __FUNCTION__);
+  ExitOnFailure(hr, "Failed to initialize");
+  WcaLog(LOGMSG_STANDARD, "Initialized.");
+
+  if (MsiGetPropertyW(hInstall, L"CustomActionData", installDir, &len) != ERROR_SUCCESS)
+  {
+    hr = HRESULT_FROM_WIN32(GetLastError());
+    ExitOnFailure(hr, "MsiGetPropertyW failed");
+  }
+  
+  if (MsiGetPropertyW(hInstall, L"ProductVersion", installerVersion, &size) != ERROR_SUCCESS)
+  {
+    hr = HRESULT_FROM_WIN32(GetLastError());
+    ExitOnFailure(hr, "MsiGetPropertyW failed");
+  }
+  
+  blen = wcslen(installDir);
+  wcscpy(binDir, installDir);
+
+  if(blen > 0 && installDir[blen-1] != L'\\')
+    wcscat(binDir, L"\\");
+
+  wcscat(binDir, L"bin\\");
+
+  for(size_t i = 0; i < std::size(symlink_from); i++)
+  {
+    wchar_t pathFrom[MAX_PATH], pathTo[MAX_PATH];
+
+    wcscpy(pathFrom, binDir);
+    wcscat(pathFrom, symlink_from[i].data());
+    wcscpy(pathTo, binDir);
+    wcscat(pathTo, symlink_to[i].data());
+    wstring wsPathFrom(pathFrom);
+
+    if (checkIfFileExists(wsPathFrom))
+      create_symlink(pathFrom, pathTo);
+  }
+
+LExit:
+  ReleaseStr(installDir);
+  ReleaseStr(installerVersion);
+  ReleaseStr(binDir);
+  return WcaFinalize(er);
+}
+
+/* MDEV-19781 MariaDB symlinks on Windows */
+extern "C" UINT __stdcall DeleteSymlinks(MSIHANDLE hInstall)
+{
+  HRESULT hr = S_OK;
+  UINT er = ERROR_SUCCESS;
+  wchar_t installDir[MAX_PATH];
+  DWORD len = MAX_PATH;
+  DWORD size = MAX_VERSION_PROPERTY_SIZE;
+  wchar_t binDir[MAX_PATH];
+  size_t blen = NULL;
+
+  hr = WcaInitialize(hInstall, __FUNCTION__);
+  ExitOnFailure(hr, "Failed to initialize");
+  WcaLog(LOGMSG_STANDARD, "Initialized.");
+
+  if (MsiGetPropertyW(hInstall, L"CustomActionData", installDir, &len) != ERROR_SUCCESS)
+  {
+    hr = HRESULT_FROM_WIN32(GetLastError());
+    ExitOnFailure(hr, "MsiGetPropertyW failed");
+  }
+
+  blen = wcslen(installDir);
+  wcscpy(binDir, installDir);
+  wcscat(binDir, L"bin\\");
+
+  for(size_t i = 0; i < std::size(symlink_to); i++) {
+    wchar_t pathTo[MAX_PATH];
+
+    wcscpy(pathTo, binDir);
+    wcscat(pathTo, symlink_to[i].data());
+
+    wstring wsPathTo(pathTo);
+
+    if ( checkIfFileExists(wsPathTo) )
+      DeleteFileW(pathTo);
+    else {
+      hr = HRESULT_FROM_WIN32(GetLastError());
+      ExitOnFailure(hr, "Could not delete symlink");
+    }
+  }
+
+LExit:
+  ReleaseStr(installDir);
+  ReleaseStr(binDir);
+  return WcaFinalize(er);
 }
