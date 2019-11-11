@@ -710,14 +710,13 @@ void tdc_purge(bool all)
     /* Concurrent thread may start using share again, reset prev and next. */
     element->prev= 0;
     element->next= 0;
+    mysql_mutex_unlock(&LOCK_unused_shares);
     mysql_mutex_lock(&element->LOCK_table_share);
     if (element->ref_count)
     {
       mysql_mutex_unlock(&element->LOCK_table_share);
-      mysql_mutex_unlock(&LOCK_unused_shares);
       continue;
     }
-    mysql_mutex_unlock(&LOCK_unused_shares);
 
     tdc_delete_share_from_hash(element);
   }
@@ -914,10 +913,8 @@ retry:
 
   was_unused= !element->ref_count;
   element->ref_count++;
-  mysql_mutex_unlock(&element->LOCK_table_share);
   if (was_unused)
   {
-    mysql_mutex_lock(&LOCK_unused_shares);
     if (element->prev)
     {
       /*
@@ -925,12 +922,14 @@ retry:
         Unlink share from this list
       */
       DBUG_PRINT("info", ("Unlinking from not used list"));
+      mysql_mutex_lock(&LOCK_unused_shares);
       unused_shares.remove(element);
       element->next= 0;
       element->prev= 0;
+      mysql_mutex_unlock(&LOCK_unused_shares);
     }
-    mysql_mutex_unlock(&LOCK_unused_shares);
   }
+  mysql_mutex_unlock(&element->LOCK_table_share);
 
 end:
   DBUG_PRINT("exit", ("share: %p  ref_count: %u",
@@ -980,28 +979,26 @@ void tdc_release_share(TABLE_SHARE *share)
   }
   mysql_mutex_unlock(&share->tdc->LOCK_table_share);
 
-  mysql_mutex_lock(&LOCK_unused_shares);
   mysql_mutex_lock(&share->tdc->LOCK_table_share);
   if (--share->tdc->ref_count)
   {
     if (!share->is_view)
       mysql_cond_broadcast(&share->tdc->COND_release);
     mysql_mutex_unlock(&share->tdc->LOCK_table_share);
-    mysql_mutex_unlock(&LOCK_unused_shares);
     DBUG_VOID_RETURN;
   }
   if (share->tdc->flushed || tdc_records() > tdc_size)
   {
-    mysql_mutex_unlock(&LOCK_unused_shares);
     tdc_delete_share_from_hash(share->tdc);
     DBUG_VOID_RETURN;
   }
   /* Link share last in used_table_share list */
   DBUG_PRINT("info", ("moving share to unused list"));
+  mysql_mutex_lock(&LOCK_unused_shares);
   DBUG_ASSERT(share->tdc->next == 0);
   unused_shares.push_back(share->tdc);
-  mysql_mutex_unlock(&share->tdc->LOCK_table_share);
   mysql_mutex_unlock(&LOCK_unused_shares);
+  mysql_mutex_unlock(&share->tdc->LOCK_table_share);
   DBUG_VOID_RETURN;
 }
 
@@ -1102,10 +1099,8 @@ bool tdc_remove_table(THD *thd, enum_tdc_remove_table_type remove_type,
               thd->mdl_context.is_lock_owner(MDL_key::TABLE, db, table_name,
                                              MDL_EXCLUSIVE));
 
-  mysql_mutex_lock(&LOCK_unused_shares);
   if (!(element= tdc_lock_share(thd, db, table_name)))
   {
-    mysql_mutex_unlock(&LOCK_unused_shares);
     DBUG_ASSERT(remove_type != TDC_RT_REMOVE_NOT_OWN_KEEP_SHARE);
     DBUG_RETURN(false);
   }
@@ -1121,16 +1116,16 @@ bool tdc_remove_table(THD *thd, enum_tdc_remove_table_type remove_type,
   {
     if (element->prev)
     {
+      mysql_mutex_lock(&LOCK_unused_shares);
       unused_shares.remove(element);
       element->prev= 0;
       element->next= 0;
+      mysql_mutex_unlock(&LOCK_unused_shares);
     }
-    mysql_mutex_unlock(&LOCK_unused_shares);
 
     tdc_delete_share_from_hash(element);
     DBUG_RETURN(false);
   }
-  mysql_mutex_unlock(&LOCK_unused_shares);
 
   element->ref_count++;
 
